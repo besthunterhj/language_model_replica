@@ -1,8 +1,9 @@
-import copy
 from typing import Tuple, List
 
+import numpy
 import torch
 import torch.nn as nn
+from sklearn.metrics import accuracy_score
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 from torchtext.vocab import vocab as vc
@@ -20,15 +21,16 @@ device = torch.device(
 
 class BrownDataset(Dataset):
     def __init__(self, dataset_type: str):
+        tmp = [sentence for sentence in brown.sents() if len(sentence) > 3]
         if dataset_type == "train":
-            self.sentences = [sentence for sentence in brown.sents() if len(sentence) > 3]
-            self.tokens = [sentence[2] for sentence in brown.sents() if len(sentence) > 3]
+            self.sentences = [sentence for sentence in tmp[:33127]]
+            self.tokens = [sentence[2] for sentence in tmp[:33127]]
         elif dataset_type == "dev":
-            self.sentences = [sentence for sentence in brown.sents() if len(sentence) > 3]
-            self.tokens = [sentence[2] for sentence in brown.sents() if len(sentence) > 3]
+            self.sentences = [sentence for sentence in tmp[33127:49691]]
+            self.tokens = [sentence[2] for sentence in tmp[33127:49691]]
         elif dataset_type == "test":
-            self.sentences = [sentence for sentence in brown.sents() if len(sentence) > 3]
-            self.tokens = [sentence[2] for sentence in brown.sents() if len(sentence) > 3]
+            self.sentences = [sentence for sentence in tmp[49691:]]
+            self.tokens = [sentence[2] for sentence in tmp[49691:]]
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -40,7 +42,6 @@ class BrownDataset(Dataset):
 
 
 def create_vocab(words: list, min_freq: int, unknown_token: str, unknown_index: int) -> Vocab:
-
     # count the words
     counter = Counter(words)
 
@@ -102,7 +103,6 @@ class Word2Vec(nn.Module):
 
 
 def pad(token_indexes: List[int], context_len: int, default_padding_val: int = 0, target_index: int = 2) -> List[int]:
-
     if len(token_indexes) > context_len:
         current_context = token_indexes[:context_len]
         current_context.pop(target_index)
@@ -118,29 +118,32 @@ def pad(token_indexes: List[int], context_len: int, default_padding_val: int = 0
         return padded_token_indexes
 
 
+def trans_to_onehot(indexes: List[int], one_hots: numpy.ndarray):
+    one_hot_context = []
+    for item in indexes:
+        item = one_hots[item]
+        one_hot_context.append(item)
+
+    return one_hot_context
+
+
 def vocab_for_token(token: str, vocab: Vocab) -> int:
     return vocab([token])
 
 
-def collate_func(samples: Tuple[str, List[str]], vocab: Vocab, context_len: int = 5) -> dict:
-
+def collate_func(samples: Tuple[str, List[str]], vocab: Vocab, one_hots: numpy.ndarray, context_len: int = 5) -> dict:
     tokens, sentences = list(zip(*samples))
 
     # 1. Sentences:
     #   + covert the tokens to indexes
     #   + padding
     #   + convert to a tensor
-    contexts = list(
+    contexts = torch.tensor(list(
         map(
-            lambda current_sentence: pad(vocab(current_sentence), context_len=context_len),
+            lambda current_sentence: trans_to_onehot(pad(vocab(current_sentence), context_len=context_len), one_hots),
             sentences
         )
-    )
-
-    for i in range(len(contexts)):
-        contexts[i] = np.eye(len(vocab))[contexts[i]]
-
-    contexts = torch.tensor(contexts)
+    ))
 
     # 2. Tokens:
     #   + convert the tokens to indexes
@@ -159,7 +162,6 @@ def collate_func(samples: Tuple[str, List[str]], vocab: Vocab, context_len: int 
 
 
 def train(model, criterion, optimizer, train_loader: DataLoader):
-
     model.train()
 
     losses = []
@@ -168,10 +170,10 @@ def train(model, criterion, optimizer, train_loader: DataLoader):
         contexts = batch["contexts"].to(device)
 
         # the result of prediction in this step
-        softmax = nn.Softmax(dim=-1)
-        current_prediction = softmax(model(tokens))
+        sigmoid = nn.Sigmoid()
+        predictions = model(tokens)
 
-        current_loss = criterion(current_prediction, contexts)
+        current_loss = criterion(sigmoid(predictions).float(), contexts.float())
         losses.append(current_loss)
 
         # back propagation
@@ -185,27 +187,40 @@ def train(model, criterion, optimizer, train_loader: DataLoader):
 
 
 def validate(model, criterion, dev_loader: DataLoader):
-
     model.eval()
 
     all_contexts = []
     all_predictions = []
 
     losses = []
-    with torch.no_grad:
+    with torch.no_grad():
         for batch in dev_loader:
             tokens = batch["tokens"].to(device)
             contexts = batch["contexts"].to(device)
 
-            predictions = model(tokens)
+            softmax = nn.Softmax(dim=-1)
+            current_prediction = softmax(model(tokens))
 
-            current_loss = criterion(predictions, contexts)
+            current_loss = criterion(current_prediction, contexts)
             losses.append(current_loss)
 
             all_contexts.append(contexts)
-            all_predictions.append(predictions.argmax(dim=-1))
+            all_predictions.append(current_prediction.argmax(dim=-1))
 
+    all_contexts = torch.cat(all_contexts)
+    all_predictions = torch.cat(all_predictions)
+    valid_loss = torch.tensor(losses).mean()
 
+    # accuracy_score function is not compatible with tensor, so we need to change them to numpy
+    valid_acc = accuracy_score(
+        y_true=all_contexts.detach().cpu().numpy(),
+        y_pred=all_predictions.detach().cpu().numpy()
+    )
+
+    print(f"Valid Loss : {valid_loss}")
+    print(f"Valid Acc  : {valid_acc}")
+
+    return valid_loss
 
 
 if __name__ == '__main__':
@@ -213,6 +228,8 @@ if __name__ == '__main__':
     words = list(brown.words())
 
     train_dataset = BrownDataset("train")
+    dev_dataset = BrownDataset("dev")
+    test_dataset = BrownDataset("test")
 
     min_freq = 3
 
@@ -226,7 +243,7 @@ if __name__ == '__main__':
     )
     model.to(device=device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCELoss()
 
     lr = 1e-3
     optimizer = Adam(
@@ -237,14 +254,22 @@ if __name__ == '__main__':
     collate_fc = lambda samples: collate_func(
         samples=samples,
         vocab=vocab,
+        one_hots=np.eye(len(vocab))
     )
 
-    batch_size = 8
+    batch_size = 16
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=collate_fc
+        collate_fn=collate_fc,
+    )
+
+    dev_loader = DataLoader(
+        dataset=dev_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fc,
     )
 
     epoch = 10
@@ -257,3 +282,9 @@ if __name__ == '__main__':
             optimizer=optimizer,
             train_loader=train_loader,
         )
+
+        # validate_loss = validate(
+        #     model=model,
+        #     criterion=criterion,
+        #     dev_loader=dev_loader,
+        # )
