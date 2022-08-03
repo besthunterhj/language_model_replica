@@ -19,9 +19,16 @@ device = torch.device(
 
 
 class BrownDataset(Dataset):
-    def __init__(self):
-        self.sentences = [sentence for sentence in brown.sents() if len(sentence) > 3]
-        self.tokens = [sentence[2] for sentence in brown.sents() if len(sentence) > 3]
+    def __init__(self, dataset_type: str):
+        if dataset_type == "train":
+            self.sentences = [sentence for sentence in brown.sents() if len(sentence) > 3]
+            self.tokens = [sentence[2] for sentence in brown.sents() if len(sentence) > 3]
+        elif dataset_type == "dev":
+            self.sentences = [sentence for sentence in brown.sents() if len(sentence) > 3]
+            self.tokens = [sentence[2] for sentence in brown.sents() if len(sentence) > 3]
+        elif dataset_type == "test":
+            self.sentences = [sentence for sentence in brown.sents() if len(sentence) > 3]
+            self.tokens = [sentence[2] for sentence in brown.sents() if len(sentence) > 3]
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -177,11 +184,35 @@ def train(model, criterion, optimizer, train_loader: DataLoader):
         print(f"Train Loss : {train_loss}")
 
 
+def validate(model, criterion, dev_loader: DataLoader):
+
+    model.eval()
+
+    all_contexts = []
+    all_predictions = []
+
+    losses = []
+    with torch.no_grad:
+        for batch in dev_loader:
+            tokens = batch["tokens"].to(device)
+            contexts = batch["contexts"].to(device)
+
+            predictions = model(tokens)
+
+            current_loss = criterion(predictions, contexts)
+            losses.append(current_loss)
+
+            all_contexts.append(contexts)
+            all_predictions.append(predictions.argmax(dim=-1))
+
+
+
+
 if __name__ == '__main__':
 
     words = list(brown.words())
 
-    dataset = BrownDataset()
+    train_dataset = BrownDataset("train")
 
     min_freq = 3
 
@@ -210,7 +241,7 @@ if __name__ == '__main__':
 
     batch_size = 8
     train_loader = DataLoader(
-        dataset=dataset,
+        dataset=train_dataset,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fc
