@@ -17,7 +17,7 @@ import torch.nn as nn
 #     return random_inputs, random_labels
 
 
-if __name__ == '__main__':
+# if __name__ == '__main__':
     #
     # test = np.random.choice(a=5, size=1, replace=False)
     # print(test)
@@ -52,9 +52,30 @@ if __name__ == '__main__':
     #
     #     input()
 
+from nltk.corpus import brown
 
 
-    a = torch.tensor([[[1., 2., 3.], [5.,5.,6.], [9.,12.,5.]]])
+# count = 0
+# for item in brown.sents():
+#     if len(item) > 3:
+#         count += 1
+#
+# print(count)
 
 
-    print(nn.Softmax)
+test = np.eye(5)
+
+print(test)
+# print(type(test))
+#
+# print()
+#
+# print(test[2])
+# print(type(test[2]))
+
+# a = torch.tensor([[[-1.1, 2.3, -3.1], [5., -5.2, 6.1], [9.2, -12.4, 5.]]])
+# sigmoid = nn.Sigmoid()
+#
+# print(a)
+# print()
+# print(sigmoid(a))
