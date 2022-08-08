@@ -1,7 +1,7 @@
-from collections.abc import Callable
 from collections import Counter
 from typing import List
 
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch import optim
@@ -11,6 +11,9 @@ from torchtext.vocab import vocab as vc
 from torchtext.vocab import Vocab
 from sklearn.datasets import fetch_20newsgroups
 from tqdm import tqdm
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
 
 
 def create_vocab(word_dict: dict, min_freq: int, unknown_token: str = "<unk>", unknown_index: int = 0) -> Vocab:
@@ -77,22 +80,21 @@ class GloVe(nn.Module):
         self.target_vecs = nn.Embedding(num_embeddings=self.word_nums, embedding_dim=self.embedding_size)
         self.context_bias = nn.Embedding(num_embeddings=self.word_nums, embedding_dim=1)
         self.target_bias = nn.Embedding(num_embeddings=self.word_nums, embedding_dim=1)
-        # self.w2i, self.i2w = {}, []
 
     def forward(self, targets, contexts, scores):
         """
-
+        compute the loss according to the equation of the paper
         :param targets: [batch_size, 1]
         :param contexts: [batch_size, 1]
         :param scores: [batch_size, 1]
-        :return:
+        :return: the loss of this batch
         """
         f_function = scores.div(self.y_max).pow(self.alpha).clamp_max(1.0)
-        # targets_vecs: [batch_size, embedding_size]
+        # targets_vecs, target_bias: [batch_size, embedding_size], [batch_size]
         targets_vecs = self.target_vecs(targets)
         targets_bias = self.target_bias(targets)
 
-        # contexts_vecs: [batch_size, embedding_size]
+        # contexts_vecs: [batch_size, embedding_size], [batch_size]
         contexts_vecs = self.context_vecs(contexts)
         contexts_bias = self.context_bias(contexts)
 
@@ -104,7 +106,7 @@ class GloVe(nn.Module):
         return loss
 
 
-def train(model, optimizer, data_loader):
+def train(model, optimizer, data_loader: DataLoader):
 
     model.train()
 
@@ -121,8 +123,21 @@ def train(model, optimizer, data_loader):
     print(f"Train Loss : {train_loss:.3f}")
 
 
+def show_vector_space(showed_word_num: int, trained_model: GloVe, vocab: Vocab):
+    final_embedding = trained_model.target_vecs.weight.detach().numpy() + trained_model.context_vecs.weight.detach().numpy()
+    embed_pca = PCA(n_components=4).fit_transform(final_embedding[:showed_word_num, :])
+    embed_tsne = TSNE(metric='euclidean', verbose=1, n_jobs=4).fit_transform(embed_pca)
+    fig, ax = plt.subplots(figsize=(20, 14))
+    for index in range(showed_word_num):
+        x, y = embed_tsne[index, :]
+        ax.scatter(x, y, color='steelblue')
+        ax.annotate(vocab.get_itos()[index], (x, y), alpha=0.7)
+
+    plt.show()
+
+
 # main function
-def main(n_docs: int, epochs: int, batch_size: int):
+def main(n_docs: int, epochs: int, batch_size: int, embedding_size: int, lr: float):
     # init the corpus dataset
     news = fetch_20newsgroups(remove=('headers', 'footers', 'quotes'))["data"][:n_docs]
 
@@ -155,21 +170,25 @@ def main(n_docs: int, epochs: int, batch_size: int):
     # init the training data
     news_dataset = NewsDataset(docs=tokenized_docs, vocab=vocab)
 
+    # init the data_loader for training
     news_dataloader = DataLoader(dataset=news_dataset, batch_size=batch_size, shuffle=True)
 
-    model = GloVe(300, len(vocab))
-    lr = 0.05
+    # init the GloVe model and the optimizer for training
+    model = GloVe(embedding_size, len(vocab))
     optimizer = optim.Adagrad(model.parameters(), lr=lr)
 
     for epoch in range(epochs):
+        print("The training step is ready! ")
         train(
             model=model,
             optimizer=optimizer,
             data_loader=news_dataloader
         )
 
+    # show the 2-D space of the word vectors by plt
+    show_vector_space(showed_word_num=300, trained_model=model, vocab=vocab)
 
 
 if __name__ == '__main__':
-    main(1000, 10, 16)
+    main(1000, 10, 128, 300, 0.05)
 
