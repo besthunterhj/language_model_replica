@@ -4,8 +4,9 @@ from typing import List
 
 import torch
 import torch.nn as nn
+from torch import optim
 from torchtext.data import get_tokenizer
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchtext.vocab import vocab as vc
 from torchtext.vocab import Vocab
 from sklearn.datasets import fetch_20newsgroups
@@ -64,6 +65,62 @@ class NewsDataset(Dataset):
         return self.target_words[index], self.context_words[index], self.co_scores[index]
 
 
+class GloVe(nn.Module):
+    def __init__(self, embedding_size: int, word_nums: int, y_max: int = 100, alpha: float = 0.75):
+        super().__init__()
+        self.embedding_size = embedding_size
+        self.word_nums = word_nums
+        self.y_max = y_max
+        self.alpha = alpha
+        # the parameters are initialized by other function
+        self.context_vecs = nn.Embedding(num_embeddings=self.word_nums, embedding_dim=self.embedding_size)
+        self.target_vecs = nn.Embedding(num_embeddings=self.word_nums, embedding_dim=self.embedding_size)
+        self.context_bias = nn.Embedding(num_embeddings=self.word_nums, embedding_dim=1)
+        self.target_bias = nn.Embedding(num_embeddings=self.word_nums, embedding_dim=1)
+        # self.w2i, self.i2w = {}, []
+
+    def forward(self, targets, contexts, scores):
+        """
+
+        :param targets: [batch_size, 1]
+        :param contexts: [batch_size, 1]
+        :param scores: [batch_size, 1]
+        :return:
+        """
+        f_function = scores.div(self.y_max).pow(self.alpha).clamp_max(1.0)
+        # targets_vecs: [batch_size, embedding_size]
+        targets_vecs = self.target_vecs(targets)
+        targets_bias = self.target_bias(targets)
+
+        # contexts_vecs: [batch_size, embedding_size]
+        contexts_vecs = self.context_vecs(contexts)
+        contexts_bias = self.context_bias(contexts)
+
+        log_items = torch.log(1 + scores)
+        square_items = (torch.sum(targets_vecs * contexts_vecs + targets_bias + contexts_bias, dim=1) - log_items) ** 2
+
+        loss = torch.mean(f_function * square_items)
+
+        return loss
+
+
+def train(model, optimizer, data_loader):
+
+    model.train()
+
+    losses = []
+    for batch_targets, batch_contexts, batch_scores in tqdm(data_loader):
+        current_loss = model(batch_targets, batch_contexts, batch_scores)
+        losses.append(current_loss)
+
+        optimizer.zero_grad()
+        current_loss.backward()
+        optimizer.step()
+
+    train_loss = torch.tensor(losses).mean()
+    print(f"Train Loss : {train_loss:.3f}")
+
+
 # main function
 def main(n_docs: int, epochs: int, batch_size: int):
     # init the corpus dataset
@@ -73,7 +130,6 @@ def main(n_docs: int, epochs: int, batch_size: int):
     tokenizer = get_tokenizer("basic_english")
 
     # get the tokens from news
-    all_tokens = []
     tokens = [token
               for doc in news[:n_docs]
               for token in tokenizer(doc.lower().strip())]
@@ -99,24 +155,21 @@ def main(n_docs: int, epochs: int, batch_size: int):
     # init the training data
     news_dataset = NewsDataset(docs=tokenized_docs, vocab=vocab)
 
+    news_dataloader = DataLoader(dataset=news_dataset, batch_size=batch_size, shuffle=True)
 
-class GloVe(nn.Module):
-    def __init__(self, embedding_size: int, word_num: int, y_max: int = 100, alpha: float = 0.75):
-        super().__init__()
-        self.embedding_size = embedding_size
-        self.y_max = y_max
-        self.alpha = alpha
-        # the parameters are initialized by other function
-        self.context_vecs = nn.Embedding(num_embeddings=word_num, embedding_dim=embedding_size)
-        self.target_vecs = nn.Embedding(num_embeddings=word_num, embedding_dim=embedding_size)
-        self.context_bias = nn.Parameter(torch.randn(word_num))
-        self.target_bias = nn.Parameter(torch.randn(word_num))
-        self.w2i, self.i2w = {}, []
+    model = GloVe(300, len(vocab))
+    lr = 0.05
+    optimizer = optim.Adagrad(model.parameters(), lr=lr)
 
-    # def build_model_from_dataset(self, dataset: NewsDataset, word_nums: int):
-    #     self.context_vecs = nn.Embedding(word_nums, )
+    for epoch in range(epochs):
+        train(
+            model=model,
+            optimizer=optimizer,
+            data_loader=news_dataloader
+        )
+
 
 
 if __name__ == '__main__':
-    main(10, 1, 1)
+    main(1000, 10, 16)
 
